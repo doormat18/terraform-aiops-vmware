@@ -226,6 +226,12 @@ resource "vsphere_virtual_machine" "k3s_server" {
       num_cpus,
       extra_config
     ]
+    precondition {
+      # CRITICAL CHECK: Ensure the vsphere_virtual_machine data source successfully 
+      # found the template by checking if a reliable attribute (like guest_id) is populated.
+      condition     = data.vsphere_virtual_machine.template.guest_id != null
+      error_message = "VSphere Template Validation Failed: The VM template '${var.template_name}' was not found in the specified Datacenter. Please verify the spelling and location of the template."
+    }    
   }
 
   extra_config = {
