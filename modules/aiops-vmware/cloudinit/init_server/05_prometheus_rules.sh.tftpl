@@ -1,0 +1,106 @@
+#!/bin/bash
+
+# This module deploys a custom PrometheusRule resource containing alerts
+# specific to storage usage in the AIOps environment.
+
+# FUNCTION: fn_deploy_aiops_storage_rules
+fn_deploy_aiops_storage_rules() {
+
+    # Find the AIOPS namespace dynamically for the ServiceMonitor deployment
+    local AIOPS_NAMESPACE=$(kubectl get po -A | grep aiops-orchestrator-controller | awk '{print$1}' | head -n 1)
+    
+    if [ -z "$AIOPS_NAMESPACE" ]; then
+        echo "Warning: Could not determine AIOps namespace. Defaulting ServiceMonitor to 'aiops'." >&2
+        AIOPS_NAMESPACE="aiops"
+    fi
+    
+    echo "--- Applying AIOps Storage Prometheus Rules to namespace $AIOPS_NAMESPACE ---"
+
+    kubectl apply -f - <<EOF
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: aiops-all-storage-rules
+  namespace: $AIOPS_NAMESPACE
+  labels:
+    com.ibm.aiops.monitoring/on: "true"
+spec:
+  groups:
+  - name: aiops.all.storage.alerts
+    rules:
+
+    # Shared AIOps Local Storage Pool Check
+    - alert: CriticalAIOPSLocalStorageExhaustion
+      expr: |
+        100 - (100 * (node_filesystem_avail_bytes{mountpoint="/var/lib/aiops/storage"} / node_filesystem_size_bytes{mountpoint="/var/lib/aiops/storage"})) > 85
+      for: 3m
+      labels:
+        severity: critical
+      annotations:
+        summary: "CRITICAL: Shared AIOPS Storage Pool Exceeded 85% Used"
+        description: "The shared local storage directory for AIOps PVs on node {{ \$labels.instance }} at /var/lib/aiops/storage is over 85% full. This affects ALL local PVCs on this node (Kafka, Minio, etc.). Current usage: {{ \$value | printf \"%.2f\" }}%."
+
+    # 1. LowNodeStorage: Node Root Partition has less than 10% free space (Critical)
+    - alert: LowNodeStorage
+      expr: |
+        sum(node_filesystem_avail_bytes{mountpoint="/"}) / sum(node_filesystem_size_bytes{mountpoint="/"}) < 0.1
+      for: 1m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Critical: Node Root storage running low"
+        description: "One or more nodes in the cluster have less than 10% free storage available on the root partition (/)."
+
+    # 2. HighPodStorageUsage: Pods using >80% of their ephemeral storage limit (Warning)
+    - alert: HighPodStorageUsage
+      expr: |
+        sum(container_fs_usage_bytes{pod=~".*"}) / sum(container_fs_limit_bytes{pod=~".*"}) > 0.8
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Warning: High Pod Storage Usage"
+        description: "A pod is exceeding 80% of its ephemeral storage limit."
+
+    # 3. NodeDiskUsage: Node Disk Usage is above 85% (Critical)
+    # NOTE: The rule above (CriticalAIOPSLocalStorageExhaustion) is more specific/useful than this one.
+    - alert: NodeDiskUsage
+      expr: |
+        100 - (100 * (node_filesystem_avail_bytes / node_filesystem_size_bytes)) > 85
+      for: 1m
+      labels:
+        severity: critical
+      annotations:
+        summary: "{{ \$labels.node_name }}: High Disk Usage detected"
+        description: "{{ \$labels.node_name }}: Disk usage is above 85% on {{ \$labels.device }} (current value is: {{ \$value | printf \"%.2f\" }}%)"
+        resolved_desc: "{{ \$labels.node_name }}: *RESOLVED*: Disk usage is within thresholds on {{ \$labels.device }} (current value is: {{ \$value | printf \"%.2f\" }}%)"
+
+    # 4. KubePersistentVolumeFillingUpInAIopsNamespace: Kubelet view of PV filling up (>85%) (Warning)
+    - alert: KubePersistentVolumeFillingUpInAIopsNamespace
+      expr: |
+        (kubelet_volume_stats_used_bytes{namespace="$AIOPS_NAMESPACE"} / kubelet_volume_stats_capacity_bytes{namespace="$AIOPS_NAMESPACE"}) > 0.85
+      for: 10m
+      labels:
+        severity: warning
+      annotations:
+        description: "The PersistentVolume claimed by {{ \$labels.persistentvolumeclaim }} in Namespace {{ \$labels.namespace }} is filled up more than 85%. Currently {{ \$value | humanizePercentage }}."
+        summary: "PersistentVolume {{ \$labels.persistentvolumeclaim }} is filling up."
+
+    # 5. HighPVUsage: Cluster-wide view of PV usage is high (>80%) (Critical)
+    - alert: HighPVUsage
+      expr: |
+        (kube_persistent_volume_used_bytes / kube_persistent_volume_capacity_bytes) > 0.8
+      for: 5m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Persistent Volume usage is high on {{ \$labels.persistentvolume }}"
+        description: "Persistent Volume {{ \$labels.persistentvolume }} is currently using more than 80% of its capacity."
+EOF
+    if [ "$?" -ne 0 ]; then
+        echo "Error: Failed to apply PrometheusRule resource." >&2
+        return 1
+    fi
+    echo "PrometheusRule 'aiops-all-storage-rules' applied successfully."
+    return 0
+}

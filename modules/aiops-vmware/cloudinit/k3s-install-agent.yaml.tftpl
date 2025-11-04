@@ -16,3 +16,14 @@ write_files:
     permissions: '0755'
     content: |
       ${install_script}
+  - path: /var/tmp/k3s-setup/init/01_k3s_registries.sh
+    owner: root:root
+    permissions: '0755'
+    content: |
+      ${k3s_registries_script}
+  - path: /var/tmp/k3s-setup/init/02_restart_k3s.sh
+    owner: root:root
+    permissions: '0755'
+    content: |
+      ${restart_k3s_script}
+  

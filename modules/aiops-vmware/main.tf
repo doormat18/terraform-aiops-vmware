@@ -77,7 +77,7 @@ resource "terraform_data" "frozen_node_cpu" {
 # Frozen values to use for all nodes, both initial and additional
 locals {
   per_node_memory_gb = terraform_data.frozen_node_memory.output.per_node_memory_gb
-  per_node_cpus = terraform_data.frozen_node_cpu.output.per_node_cpus
+  per_node_cpus      = terraform_data.frozen_node_cpu.output.per_node_cpus
 }
 
 

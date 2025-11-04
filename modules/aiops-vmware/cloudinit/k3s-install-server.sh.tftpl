@@ -9,9 +9,9 @@ install_aiops=${install_aiops}
 num_nodes=${num_nodes}
 
 SETUP_DIR="$(dirname "$(readlink -f "$0")")"
-MODULES_DIR="$${SETUP_DIR}/server_modules"
+MODULES_DIR="$${SETUP_DIR}/init"
 
-# --- Load all module files ---
+# --- Load all server module files ---
 # Modules are loaded in alphabetical/numeric order based on their filename.
 for module in "$${MODULES_DIR}"/*.sh; do
     echo "Sourcing module: $${module}"
@@ -243,6 +243,7 @@ firewall-cmd --permanent --add-port=2380/tcp # k3s etcd peer communication
 firewall-cmd --permanent --add-port=51820/udp # Flannel + WireGuard (IPv4 traffic)
 firewall-cmd --permanent --add-port=51821/udp # Flannel + WireGuard (IPv6 traffic)
 firewall-cmd --permanent --add-port=5001/tcp # mirrored registry
+firewall-cmd --permanent --add-port=9100/tcp # Prometheus node-exporter (if needed)
 firewall-cmd --permanent --zone=trusted --add-source=10.42.0.0/16 # pods
 firewall-cmd --permanent --zone=trusted --add-source=10.43.0.0/16 # services
 firewall-cmd --reload
@@ -313,7 +314,8 @@ if [[ "$first_instance" == "$instance_id" ]]; then
 
   disable_checksum_offload
 
-  k3s_audit_config
+  # TODO k3s audit config disabled while testing prometheus
+  #k3s_audit_config
 
   nonroot_config
 
@@ -403,6 +405,13 @@ EOF
     rm -fr ~/.aiopsctl/
   fi
 
+  %{ if run_observers }
+
+  # need entity types defined
+  fn_create_topology_merge_rules
+
+  sleep 30 # sleep to allow merge rules time
+
   # set up SA for k8s topology
   fn_configure_rbac_for_service_account
 
@@ -415,12 +424,22 @@ EOF
   # give k8s observer time to run
   sleep 60
   
-  # need entity types defined
-  fn_create_topology_merge_rules
-
   fn_load_vcenter_observer_job
   # run observer job again after merge rules created
-  fn_load_k8s_observer_job  
+  #fn_load_k8s_observer_job  
+  %{ endif }
+
+  # Configure Prometheus
+  NODE_EXPORTER_IMAGE="quay.io/prometheus/node-exporter:v1.10.1"
+%{ if ! use_private_registry }
+  fn_configure_k3s_registries
+  fn_restart_and_wait_for_k3s
+  NODE_EXPORTER_IMAGE="k3s-node-exporter-alias.io/prometheus/node-exporter:v1.10.1"
+%{ endif }
+  fn_configure_prometheus_and_node_exporter "$NODE_EXPORTER_IMAGE"
+
+  # create rules
+  fn_deploy_aiops_storage_rules
 
 else
   echo ":( Cluster join"
@@ -446,7 +465,12 @@ else
 
   disable_checksum_offload
 
-  k3s_audit_config
+  #k3s_audit_config
+
+%{ if ! use_private_registry }
+  fn_configure_k3s_registries
+  fn_restart_and_wait_for_k3s
+%{ endif }
 
   nonroot_config
 

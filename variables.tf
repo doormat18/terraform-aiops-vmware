@@ -165,6 +165,12 @@ variable "base_domain" {
   default = "gym.lan"
 }
 
+variable "run_observers" {
+  type        = bool
+  default     = true
+  description = "Run VMware vCenter and kubernetes observers post install"
+}
+
 // mailcow (demo application) variables
 
 variable "use_mailcow" {
