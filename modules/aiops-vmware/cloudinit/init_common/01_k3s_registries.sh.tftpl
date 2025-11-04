@@ -1,0 +1,51 @@
+#!/bin/bash
+
+# Uses yq to safely inject a specific, non-mirrored endpoint using a dummy alias 
+# to bypass the conflict with the general icr.io mirror rule for quay.io.
+
+# FUNCTION: fn_configure_k3s_registries
+fn_configure_k3s_registries() {
+    # Install yq if not already present
+    echo "Installing yq..."
+    yum install -y yq || dnf install -y yq || { echo "ERROR: Failed to install yq."; exit 1; }
+    echo "yq installed."
+
+    local REGISTRIES_CONFIG_PATH="/etc/rancher/k3s/registries.yaml"
+    local TEMP_FILE="/tmp/registries.yaml.tmp"
+
+    # Define the dummy alias we will use in the DaemonSet image path
+    local DUMMY_ALIAS="k3s-node-exporter-alias.io"
+    # This is the actual endpoint it will pull from
+    local REAL_ENDPOINT="https://quay.io"
+
+    echo "--- Modifying K3s Registry Mirrors using Dummy Alias for Node Exporter ---"
+
+    # 1. Check if the specific exception is already present
+    # We pass the variable using --arg and reference it as $alias in the yq expression.
+    if yq e --arg alias "$DUMMY_ALIAS" ".mirrors.[$alias]" "$REGISTRIES_CONFIG_PATH" 2>/dev/null; then
+        echo "Dummy alias exception for $DUMMY_ALIAS is already present. Skipping modification."
+        return 0
+    fi
+    
+    echo "Inserting dummy mirror '$DUMMY_ALIAS' pointing to '$REAL_ENDPOINT'..."
+
+    # 2. Use yq to perform structural modifications using Bash interpolation:
+    yq e "
+      # 1. Insert the new dummy mirror, referencing the interpolated DUMMY_ALIAS.
+      .mirrors.\"$DUMMY_ALIAS\" = {
+        # 2. Reference the interpolated REAL_ENDPOINT.
+        \"endpoint\": [\"$REAL_ENDPOINT\"],
+        \"rewrite\": { \"(.*)\": \"\$1\" }
+      } 
+    " "$REGISTRIES_CONFIG_PATH" > "$TEMP_FILE"
+
+    if [ "$?" -ne 0 ]; then
+        echo "Error: Failed to process registries.yaml with yq. Aborting." >&2
+        return 1
+    fi
+    
+    mv "$TEMP_FILE" "$REGISTRIES_CONFIG_PATH"
+    echo "Registry configuration updated successfully. A K3s restart is required."
+    
+    return 0
+}

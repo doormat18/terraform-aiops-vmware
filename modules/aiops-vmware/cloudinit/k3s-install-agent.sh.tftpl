@@ -4,6 +4,16 @@ set -x
 
 # output in /var/log/cloud-init-output.log
 
+SETUP_DIR="$(dirname "$(readlink -f "$0")")"
+MODULES_DIR="$${SETUP_DIR}/init"
+
+# --- Load all server module files ---
+# Modules are loaded in alphabetical/numeric order based on their filename.
+for module in "$${MODULES_DIR}"/*.sh; do
+    echo "Sourcing module: $${module}"
+    source "$${module}"
+done
+
 wait_lb() {
 while [ true ]
 do
@@ -173,6 +183,7 @@ firewall-cmd --permanent --add-port=51820/udp # Flannel + WireGuard (IPv4 traffi
 firewall-cmd --permanent --add-port=51821/udp # Flannel + WireGuard (IPv6 traffic)
 firewall-cmd --permanent --add-port=10250/tcp # k3s kubelet metrics and logs (optional)
 firewall-cmd --permanent --add-port=5001/tcp # Distributed registry
+firewall-cmd --permanent --add-port=9100/tcp # Prometheus node-exporter (if needed)
 firewall-cmd --permanent --zone=trusted --add-source=10.42.0.0/16 # pods
 firewall-cmd --permanent --zone=trusted --add-source=10.43.0.0/16 # services
 firewall-cmd --reload
@@ -222,6 +233,12 @@ else
 fi
 
 disable_checksum_offload
+
+%{ if ! use_private_registry }
+# configure registries for prometheus node-exporter and restart k3s
+fn_configure_k3s_registries
+fn_restart_and_wait_for_k3s
+%{ endif }
 
 nonroot_config
 
