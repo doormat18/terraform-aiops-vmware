@@ -187,6 +187,20 @@ resource "vsphere_virtual_machine" "k3s_server" {
     destination = "/tmp/aiops.key.pem"
   }
 
+  # Copy utility script
+  provisioner "file" {
+
+    connection {
+      type        = "ssh"
+      user        = "clouduser"
+      private_key = tls_private_key.deployer.private_key_pem
+      host        = self.default_ip_address
+    }
+
+    source      = "${path.module}/util/trigger_disk_alert.sh"
+    destination = "/home/clouduser/trigger_disk_alert.sh"
+  }
+
   # Copy the ethtool fix script
   provisioner "file" {
 
